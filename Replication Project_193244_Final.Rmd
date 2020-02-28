@@ -1,0 +1,1363 @@
+---
+title: "C6 Statistics II Replication Project: Direct Democracy and Government Size (Sanz, 2018)"
+author: "Daniel Kai Sheng Boey"
+date: "18th December 2019"
+output: 
+  html_notebook:
+    toc: true
+---
+# Loading Packages and Directory
+```{r, message = FALSE}
+## ALL LIBRARIES (DO NOT REORDER)
+library(QMSS)
+library(tidyverse)
+library(cobalt)
+library(kableExtra)
+library(MatchIt)
+library(ggdag)        # For DAGS
+library(dagitty)      # For DAGs
+library(foreign)      # For downloading foreign data files
+library(AER)          # For ivreg function; applied econometrics regression package
+library(plm)
+library(nprobust)     # For nonparametric robust estimation and inf methods using local polynomial regression and kernel density estimation
+library(rdd)          # For RDDs
+library(rdrobust)     # Alternative RDD
+library(sjPlot)       # For plotting regressions.
+library(sjmisc)
+library(sjlabelled) 
+library(mediation)   # For mediating effects
+#library(rddtools)
+library(devtools)
+#install_github("MatthieuStigler/RDDtools", subdir = "RDDtools")
+library(RDDtools)
+library(stargazer)    # For tables
+library(rlist)
+library(clubSandwich) # For clustered SEs
+library(multiwayvcov) # For clustered SEs
+library(lmtest)
+library(extrafont)
+
+# note psych affects ALPHA which affects dag function.
+
+setwd("C:/Users/danie/OneDrive/Hertie Fall 19/C6 Stats II Causality/Replication Project/dataverse_files")
+```
+
+# Abstract
+Sanz (2018) studies the effect of direct democracy on economic policy, namely: revenues, expenditures and deficits. In this study, he used a fixed-effect regression discontinuity design (RDD), controlling for municipality and time fixed effects. According to his models, direct democracy leads to a smaller government, reduces public spending by ~8%, reduces revenues by ~6% but had no statistically significant effect on budget deficits. 
+
+In this report, I aim to replicate the results as laid out in the paper and aim to further the discussion of the results in the paper with modifications to the model. In this paper, Chapter 3 replicates Table 1 and Figure 2 in Sanz's paper. Chapters 4 to 6 aim to replicate the results for Table 2 and Figure 3. In Chapter 7, I investigate the covariate balance within the optimal bandwidths and compare hypothetical results should conditioning on these covariates be necessary. Thereafter, in Chapter 8, I estimate the LATE of revenues and expenditures without logarithms and found no statistically significant effect of Direct Democracy. Last, in Chapter 9, I used the World Bank's GDP deflators for Spain and estimated the sensitivity of LATE to higher and lower GDP deflators.
+
+# CHAPTER ONE: Introduction
+Direct democracy (DD) is a process whereby individuals within the community can participate in the decision-making process via their personal votes. This is in comparison with representative democracy (RD), whereby representatives are voted into power and in turn, decide on behalf of the community members. The Spanish national law mandates that communities with 100 or more inhabitants must follow the representative democracy system, whereas those with less than 100 follow the direct democracy system. 
+
+Thus, in theory, this creates a sharp RDD whereby the running variable is the municipality's population size and the treatment variable is the presence of representative democracy (where population $\geq$ 100). The outcome variables are then: the logarithm of expenditures, the logarithm of revenues and deficits. According to Sanz, this RDD design is valuable as:
+
+1. The outcome variable (DD/RD) can be seen as endogenous as it is determined by population size, as mandated by the national law. 
+2. No other rule changes at the threshold of population = 100. Thus, there are no other confounding effects at the cutoff.
+3. The number of observations is large (over 42,000 municipality-year observations), allowing a less biased estimate.
+4. Spanish municipalities have huge autonomy over their municipality's economic policy, thus allowing effects to be attributed more on the democratic design. 
+
+Therefore, the outcome variable is then estimated by:
+
+$Outcome_{myt} = \alpha_m + \gamma_y + \beta DirDem_{mt} + f(Population - 100) + u_{myt}$
+
+where $Outcome_{myt}$ is deficits, logarithm of expenditures and logarithm of revenues, $\alpha_m$ is the municipality fixed effect, $\gamma_y$ is the year fixed effect, $ f(Population - 100)$ is the running variable or population where >0 indicates absence of treatment (Representative Democracy) and <0 indicates presence of treatment (Direct Democracy) and $u_{myt}$ is the error term. Here, $\beta$ is the local average treatment effect of interest whereas $DirDem_{mt}$ is the treatment variable, the presence of Direct Democracy.
+
+# CHAPTER TWO: Theoretical Framework of the Paper
+Sanz (2018) argues that direct democracy institutions allow people to vote their individual preferences within the municipality. This then allows their votes to bypass representative institutions that are dominated by individuals with power (economic, political, etc.). In turn, this enables enacted policies to be more in line with the preferences of the median voter. 
+
+How does this affect economic spending of the voter? Sanz argues that this follows the relationsihps shown in the DAG below. Firstly, the municipality's population affects the democratic system (either DD or RD). This then affects the political decision system. He argues that the majority of individuals prefer low special-interest spending (e.g. on minorities such as disabled, the marginalised etc.). Under RD, there is more incentive for parties to propose high-special interest spending against the majority. Under DD, the converse is true. Thus, with less special interest spending, expenditure and deficits are then affected. The combination of the two affects deficits. 
+
+In addition, he argues that the political decision system affects the potential for confrontation between neighbours. In DD, participants will try to avoid confrontation and in so doing, mitigate the potential of special interests being brought up and supported. Again, this reduces expenditure.
+
+As such, the DAG below encompasses the causal associations mentioned above.
+```{r}
+
+dagx <- dagify(DDRD ~ Pop,
+              Def ~ Exp,
+              Def ~ Rev,
+               Exp ~ SIS,
+               Confr ~ PDS,
+              SIS ~ Confr,
+               SIS ~ PDS,
+               PDS ~ DDRD,
+              Rev ~ PDS)
+
+ggdag(dagx)
+```
+*where Pop = Population of the municipality, DDRD = Direct Democracy/Representative Democracy, PDS = Political Decision-System, SIS = Special Interest Spending, Confr = tendency for confrontation between neighbors, Rev = Revenue, Exp = Expenditure, Def = Deficit.*
+
+This DAG is important as a premise for a RDD analysis as a key assumption is that the average potential outcomes around the cutoff are continuous,
+
+i.e. $E(Y_i(d)|X_i = x)$ is continuous in $x$ around $X_i = c$ for $d = 0,1$
+*where Y is the potential outcome, i is the municipality, d is the treatment variable (population) and $X_i$ is the forcing variable which wholly deterministically alters the treatment at the cutpoint $c$*.
+(Referred from Presentation 7, Mark Kayser, 2019)
+
+If this continuity assumption is assumed, then we can estimate the local average treatment effect at the threshold:
+LATE = $E(Y_i(1)-Y_i(0)|X_i=c, )$, whereby elements are randomly selected into treatment at the threshold $c$. 
+
+Assuming the DAG is causally and factually correct, then population as a running variable is exogenous to the causal effect of the democratic system (treatment variable) on revenues, expenditures and deficits. The model then requires no conditioning on any covariates for there are no back door paths, observable and unobservable, assuming this DAG encompasses all causal effects.
+
+However, this assumption does not hold if there is selection bias, given $x$ at the cutoff $c$. For example, if grants were provided at the cutoff population < 100, then it may cause deficits in direct democracy to be a lot higher than that of the representative democracy. Then, the 'LATE' is biased due to the provision of grants, which occur at the cutoff. A robustness check involves first checking if such a selection bias into treatment exists. One such test could be, such as that conducted by Sanz, is to see if there is a discontinuity in the covariate at the cutoff. Another test could be the covariate balance between the subsets before and after the cutoff. This test will be conducted in Chapter 7 of this paper. 
+
+# CHAPTER THREE: Data Preparation and Summary Statistics
+## 3.1, 3.2 Data Preparation and Analysis
+Firstly, data has to be prepared for further analysis. I took the most relevant information, especially those that will be used for descriptive statistics (Table 1) and the regression models later on. The years relevant to the analysis are those between 1988 and 2011 (inclusive).
+
+```{r}
+
+########### 3.1 Loading Data ###########
+## Main Data
+df<-read.dta("sanz_psrm.dta")
+#str(data)
+df_t <- as_tibble(df)
+
+## Spain GDP Deflator from World Bank
+#spain_gdpdeflator <- t(read.csv("spain_gdpdeflator.csv", stringsAsFactors = FALSE))
+#col.names(spain_gdpdeflator) <- "GDP Deflator"
+#gdpdef_t <- spain_gdpdeflator
+#str(gdpdef_t)
+#year = seq(1961,2019, by = 1)
+#year_t<- year
+#gdpdef_t
+#str(year_t)
+#bind_cols(gdpdef_t,year)
+
+```
+
+```{r}
+########### 3.2 Extracting Relevant Covariates ###########
+
+library(psych, quietly = TRUE, warn.conflicts = FALSE)
+# Quick look at the data
+#glimpse(df_t)
+
+#df.continuous <- data_tibble %>% select_if(is.numeric)
+
+#glimpse(df.continuous)
+#Removing missing data
+#df.continuous<-na.omit(df.continuous)
+
+
+# Extracting data between (including) 1988 and 2011. 
+df.selected <- df_t %>%
+  select("expenditures_c","revenues_c","deficit_c","g_p_votes_pp","g_p_votes_psoe","g_p_votes_iu","g_p_diff","g_p_votes_winner","g_p_turnout","age_avg","sh_young","sh_adult","sh_old","sh_foreign","sh_eu", "population","unemployment_rate","year","dd","l_log_revenues_c","l_log_expenditures_c","l_deficit_c","id","log_revenues_c","log_expenditures_c") %>% 
+  filter(year>=1988 & year<=2011)
+
+# Making sure that deficit_c has no NAs
+# Function taken from: https://stackoverflow.com/questions/11254524/omit-rows-containing-specific# -column-of-na
+
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+df.selected<-completeFun(df.selected,c("expenditures_c"))
+```
+
+## 3.3 Table 1 - Summary Statistics
+Here, a summary of the relevant statistics (mean, standard deviation, 1st, 50th and 99th percentile and total count) was taken. This is a replication of the statistics as laid out in Table 1. 
+
+```{r}
+######################## REPLICATING TABLE 1 ######################################
+########### 3.3 Table 1 - Summary statistics ###########
+# I used describe to calculate the 1st, 50th and 99th percentile. 
+summaryA<-df.selected %>% 
+  select(-one_of("dd","l_log_revenues_c","l_log_expenditures_c","l_deficit_c", "id", "year", "log_revenues_c", "log_expenditures_c")) %>%
+  describe(check = TRUE, fast = TRUE, quant = c(0.01,0.5,0.99),na.rm=TRUE)
+
+summaryA <- summaryA %>%
+  select(mean, sd, Q0.01, Q0.5, Q0.99, n, min,max,range,se) %>%
+  rename(p1 = Q0.01,
+         p50 = Q0.5,
+         p99 = Q0.99,
+         count = n)
+# Renaming row names to relevant names
+row.names(summaryA)<- c("Expenditures (Euro per cap)",
+         "Revenues (Euro per cap)",
+         "Deficit (Euro per cap)",
+         "PP Vote Sh (%)",
+         "PSOE Vote Sh (%)",
+         "IU Vote Sh (%)",
+         "Votes Difference (%)",
+         "Votes Winner (%)",
+         "Turnout (%)",
+         "Mean Age (years)",
+         "Young (%)",
+         "Middle-Aged (%)",
+         "Old (%)",
+         "Immigrants (%)",
+         "EU Immigrants (%)",
+         "Population (inhabitants)",
+         "Unemployment (%)")
+
+#summaryA
+# Creating a nice table with kable
+kable(summaryA, digits = 2) %>%
+ kable_styling(bootstrap_options = c("striped","scale_down"), full_width = FALSE, position = "left")
+
+# Here, DD = 1, RD = 0
+df.selected<- df.selected %>%
+  mutate(dd_bi = ifelse(dd == "DD", 1,0))
+```
+In addition to Table 1, I created a covariance table to test the covariate balance. Although technically I ought to subset the dataset based on the bandwidth used (since we aggregate the outcomes within the bandwidth), I first used the entire dataset for an initial check. 
+```{r, warning = FALSE}
+########### 3.3b Covariate Balance Table ###########
+# Preparation for covariate balance
+summaryB <- df.selected %>% 
+  group_by(dd)%>%
+  select(-one_of("dd","l_log_revenues_c","l_log_expenditures_c","l_deficit_c", "id", "year", "log_revenues_c", "log_expenditures_c"),"dd_bi")%>%
+  summarise_all(funs(mean(., na.rm = T)))
+colnames(summaryB)<-c("Democracy System","Expenditures (Euro per cap)",
+         "Revenues (Euro per cap)",
+         "Deficit (Euro per cap)",
+         "PP Vote Sh (%)",
+         "PSOE Vote Sh (%)",
+         "IU Vote Sh (%)",
+         "Votes Difference (%)",
+         "Votes Winner (%)",
+         "Turnout (%)",
+         "Mean Age (years)",
+         "Young (%)",
+         "Middle-Aged (%)",
+         "Old (%)",
+         "Immigrants (%)",
+         "EU Immigrants (%)",
+         "Population (inhabitants)",
+         "Unemployment (%)")
+kable(summaryB, digits = 3) %>%
+ kable_styling(bootstrap_options = c("striped","scale_down"), full_width = F, position = "left")%>%
+    scroll_box(width = "900px",height = "200px")
+```
+
+## 3.4 Figure 2 - Histogram of Population Sizes
+A histogram of the municipality-year observations with bins of 5-inhabitants was replicated as Figure 2 in the paper.  It is observed that there are slight observations between the observations of population that is obtained in the paper and the one produced here. However, the overall trend seems consistent. 
+
+```{r}
+######################## REPLICATING FIGURE 2 ######################################
+
+########### 3.4: Figure 2 - Histogram ###########
+
+# Histogram of population sizes with each observtion being a municipality-year. I made sure that the bin size is 5 as in the paper.
+#windowsFonts(Times=windowsFont("Times New Roman"))
+ggplot(df.selected, aes(x=population)) +
+  geom_histogram(binwidth = 5,color = "white", fill = "black", position = "dodge")+
+  ggtitle("Figure 2: Histogram of population sizes")+
+  xlab("Population")+
+  ylab("Observations")+
+#  theme(text=element_text(family = "Times",face = "bold"))
+  theme_classic()
+```
+
+# CHAPTER FOUR: Main Results -  The Effect of Direct Democracy on Deficit
+To begin the analysis, I chose to inspect the deficit first since the regressions with regards to the deficit were the most ambigious and non-significant regression discontinuity. The next three chapters will analyze each of the economic indicators as follows:
+
+**Chapter Four: Effect of Direct Democracy on Deficit**
+
+**Chapter Five: Effect of Direct Democracy on Revenues**
+
+**Chapter Six: Effect of Direct Democracy on Expenditures**
+
+*Note all effects on deficit are in Euros per capita, whilst that of revenues and expenditures are in the logarithm of Euros per capita, except where specified*
+
+```{r}
+
+cutoff <- 99.5 # Cut off used by Sanz to make sure that the cutoff is clear. 
+
+df.discon<-df.selected %>%
+  mutate(pop_run = population - cutoff,
+         deficit_c_dem = deficit_c,
+         log_exp_dem   = log_expenditures_c,
+         log_rev_dem   = log_revenues_c)
+```
+
+## 4.1 Effect of Direct Democracy on Deficits
+Firstly, we inspect the running variable (population's effect on the treatment variable (DD/RD). In the figure below, we see that the effect of the running variable results in a sharp RD at the cutoff (population = 100).
+```{r}
+########### 4.1 Visual Inspection ###########
+# Inspecting if the running variable effect on the endogenous treatment variable results in a sharp or fuzzy RDD
+df.discon %>%
+  ggplot(aes(x = population, y = dd_bi,group = as.factor(dd), color = as.factor(dd)))+
+  geom_point(position = "jitter") +
+  geom_vline(xintercept = 100)+  
+  ggtitle("DD/RD against Population")+
+  xlab("DD")+
+  ylab("Observations")+
+  scale_colour_discrete(name="Democracy System",
+                         breaks=c("DD","RD"),
+                         labels=c("Direct Democracy","Representative Democracy"))
+```
+Furthermore, we see no clear effect on the outcome variable (deficit) at the cutoff.
+```{r}
+# Looking at deficit at the cutoff
+bw <-27
+df.discon %>%
+#   filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+ ggplot(aes(x = population, y = deficit_c_dem, group = as.factor(dd), color = as.factor(dd)))+
+#  stat_summary(fun.y = "mean")+
+#  stat_summary_bin(binwidth = 4)+
+  stat_smooth(method=lm)+ 
+  ggtitle("Deficit against population")+
+  xlab("Population")+
+  ylab("Deficit")+
+  scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("DD","RD"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+## 4.2, 4.3 Using *RDestimate* and *IKbandwidth* 
+
+The author here uses a fixed-effect regression discontinuity design, using both municipality and time fixed effects. To attempt to replicate the results found in the paper, I first use *RDestimate* and then *IKbandwidth* as well as a combination of the two. Both show different results than what was reported within the paper. An intriguing note is that the author used 0.5x and 1.5x (rather than 0.5x and 2.0x) the optimal BW to show robustness, perhaps to show more convincing regression estimates.
+
+In these sections, I used RD estimate to estimate the results using the 'optimal bandwidth' from the paper. Thereafter, I manually calculated the IK bandwidth using *IKbandwidth* and plotted the results when the BW was 1x, 1.5x and 0.5x the optimal bandwidth. One major observation of the graphs is that there is no clear discontinuity at the cutoff. In fact, a non-linear (or even linear) fit may be appropriate. (This fact is further corroborated by the non-statistically significant results I replicated in the section below) 
+
+Unfortunately, the estimates of both the casual effect (even with the paper's bandwidths) and the bandwidths calculated by these methods differ from the results in the paper. As such, in the following sections, I use other methods to derive the correct replicated results. 
+```{r}
+########### 4.2 Using RD Estimate ###########
+
+def_m<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = 98) 
+# bw = for bandwidth; using the data from the paper
+summary(def_m)
+RDplot(def_m, range = c(-30,30), main="Deficit with Paper BW - 98", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+########### 4.3 Manually calculating the IK Bandwidth and modelling for the 1.5-BW and Half-BW ###########
+
+def_ik<- IKbandwidth(Y=df.discon$deficit_c_dem, X=df.discon$pop_run,cutpoint = 0,kernel = "rectangular")
+
+def_ikm<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_ik)
+summary(def_ikm)
+RDplot(def_ikm, range = c(-30,30), main="Deficit with IK Optimised BW = 20.884", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+def_ikm_15<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_ik*1.5)
+summary(def_ikm_15)
+RDplot(def_ikm_15, range = c(-30,30), main="Deficit with 1.5x IK Optimised BW = 31.326", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+def_ikm_05<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_ik*0.5)
+summary(def_ikm_05)
+RDplot(def_ikm_05, range = c(-30,30), main="Deficit with 0.5x IK Optimised BW = 10.442", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+```
+## 4.4 Using *rdbwselect_2014* and *RDestimate*
+Finally, I used *rdbwselect_2014* to calculate the IK derived bandwidth estimates. This allowed me to obtain the correct bandwidths. For the models in 4.4, I used  *RDestimate*, which provided regression estimates without any fixed effects. Furthermore, I used a uniform/rectangular kernel to match that used in the paper. This means that each observation of muncipality-year is weighted equally. The bandwidth selection used was the Imbens-Kalyanaram method with the outcome variable (deficit/ logarithm of expenditure or revenue) as the dependent variable and the population as the running variable. 
+```{r}
+########### 4.4 Trying RD Robust Instead ###########
+# This verifies the results of the paper; therefore, he used this function to calculate the estimates.
+def_rddrobust_bw <- rdbwselect_2014(y=df.discon$deficit_c_dem, x=df.discon$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw<-def_rddrobust_bw$bws[1]
+bw_def<-bw
+def_robustm<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_rddrobust_bw$bws[1])
+summary(def_robustm)
+RDplot(def_robustm, range = c(-30,30), main="Deficit with IK Optimised BW = 98", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+def_robust_15<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_rddrobust_bw$bws[1]*1.5)
+summary(def_robust_15)
+RDplot(def_robust_15, range = c(-30,30), main="Deficit with 1.5x IK Optimised BW = 147", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+def_robust_05<- RDestimate(deficit_c_dem~pop_run, data = df.discon, kernel = "rectangular",cutpoint = 0,bw = def_rddrobust_bw$bws[1]*0.5)
+summary(def_robust_05)
+RDplot(def_robust_05, range = c(-30,30), main="Deficit with 0.5x IK Optimised BW = 49", xlab="Population (adjusted)",ylab="Deficit (adjusted)")
+
+
+```
+
+## 4.5 Using *rdbwselect_2014* and *plm*
+Finally, I used the bandwidth obtained from *rdbwselect_2014* and subsetted the data to within the bandwidth. Thereafter, I used *plm* to apply a fixed-effects linear regression to the dataset. This provides me with the correct regression estimates as stated in Sanz, 2018. Here, it is noteworthy that the fixed effects model is a two-way fixed effects model, accounting for both unit (municipality) and time (year) fixed effects. Running a two-way fixed effects model is equivalent to creating dummy variables for both the municipalities and the years. 
+
+In addition, I made use of the *coeftest* function in conjunction with *vcovHC* to cluster the standard errors around the municipalities. This caused the standard errors to be closer to that reported in the paper. However, there are still slight discrepancies between the standard errors found here and that in the paper, which could result from the differences in calculating these errors by R and Stata. Furthermore, I declare that here I am unsure if my current method involves clustering on both the running variable and the municipalities or just the municipalities. However, I assume the former occurs as the standard errors have to be clustered on the independent variable (the running variable or population, in this case).
+
+It is noteworthy that the number of observations differs slightly (34,617 in my results as compared to 34,570 in Sanz's results). However, the estimates are accurate. 
+```{r}
+########## 4.5 Using PLM to Estimate the Effect ##########
+
+bw_def3 <- bw_def*c(1,1.5,0.5) # all the relevant bandwidths
+
+######################### NORMAL BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_def3[1] # Selecting the right bandwidth
+df.plm<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+#str(df.plm)
+## Running the linear PLM Model
+def_plm <- plm(deficit_c_dem~pop_run+dd_bi+dd_pop_run, data = df.plm,index = c("id","year"), model = "within", effect = "twoways")
+ summary(def_plm)
+ 
+## Clustering the standard errors around
+ #arellano & HC1 work the best
+def_plm_c<-coeftest(def_plm,vcov=vcovHC(def_plm, method = "arellano",type="HC1", cluster = "group"))
+ 
+# Standard Linear Model gives the same result 
+#  def_lm <- lm(deficit_c_dem~pop_run+dd_bi+dd_pop_run + factor(year)+factor(id), data = df.plm)
+#  summary(def_lm)
+#  vcov_both <- cluster.vcov(def_lm, cbind(df.plm$id, df.plm$pop_run))
+#  coeftest(def_lm, vcov_both)  # std error produced= 9.8949
+
+## Running the Cubic PLM Model
+def_plm_cubic <- plm(deficit_c_dem~pop_run+dd_bi+I(dd_bi*pop_run)+ + I(dd_bi*pop_run^2)+I(dd_bi*pop_run^3)+I(pop_run^2)+I(pop_run^3),
+                     data = df.discon,index = c("id","year"), model = "within", effect = "twoways")
+  summary(def_plm_cubic)
+def_plm_cubic_c<-coeftest(def_plm_cubic,vcov=vcovHC(def_plm_cubic, method = "arellano",type="HC1", cluster = "group"))
+######################### 1.5x BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_def3[2] # Selecting the right bandwidth
+df.plm15<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+#str(df.plm)
+## Running the linear PLM Model
+def_plm15 <- plm(deficit_c_dem~pop_run+dd_bi+dd_pop_run, data = df.plm15,index = c("id","year"), model = "within", effect = "twoways")
+ summary(def_plm15)
+def_plm15_c<-coeftest(def_plm15,vcov=vcovHC(def_plm15, method = "arellano",type="HC1", cluster = "group"))
+ 
+ ## Attempting to cluster all the SEs based on the municipalilty and the running variable
+#coef_test(def_plm15, vcov = "CR1", cluster = "individual", test = "naive-t")
+#coeftest(def_plm15, vcov.=function(x) #vcovDC(x, type="HC1", maxlag=4))
+#  def_plm15$coefficients[["dd_bi"]]
+
+# Tried to use clustering
+#vcov_both <- cluster.vcov(def_plm15, cbind(df.plm15$id, df.plm15$pop_run))
+#coeftest(m1, vcov_both)  
+ 
+######################### 0.5x BANDWIDTH ########################  
+## Subsetting the data to within the bandwidth
+bw <- bw_def3[3] # Selecting the right bandwidth
+df.plm05<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+#str(df.plm)
+
+## Running the linear PLM Model
+def_plm05 <- plm(deficit_c_dem~pop_run+dd_bi+dd_pop_run, data = df.plm05,index = c("id","year"), model = "within", effect = "twoways")
+  summary(def_plm05)  
+def_plm05_c<-coeftest(def_plm05,vcov=vcovHC(def_plm05, method = "arellano",type="HC1", cluster = "group"))
+
+  ## Testing prediction models
+  # Doesn't seem to work
+#df.plm$test  <-predict(def_lm)
+#ggplot(df.plm,aes(x = pop_run, y = test))+
+#  geom_line()
+#  geom_point(aes(x = pop_run,y = deficit_c_dem))
+```
+The table here presents the regression results with robust standard errors, summarizing the results of the four models run above:
+
+1. Optimal bandwidth linear model
+2. 1.5x Optimal bandwidth linear model
+3. 0.5x Optimal bandwidth linear model
+4. Cubic model (using no bandwidth, i.e. the entire dataset)
+```{r,results="asis", warning = FALSE, error = FALSE}
+stargazer(
+          def_plm,def_plm15,def_plm05,def_plm_cubic,
+          se = list(def_plm_c[,2],def_plm15_c[,2],def_plm05_c[,2],def_plm_cubic_c[,2]),
+          type = "html",
+          title = "Deficit PLM Results with Robust SE",
+          dep.var.caption = "Deficit",
+          dep.var.labels = "Difference in revenue and expenditure (\u20AC)",
+          omit = c("year"),
+          column.labels = c("Optimized BW","1.5 x BW", "0.5 x BW", "Cubic Model (Full Data)"),
+          suppress.errors = TRUE,
+          notes = "BW = 98, 1.5 x BW = 147, 0.5 x BW = 49",
+          order = c(2,1,3),
+          model.names = FALSE,
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"))
+```
+
+## 4.6 Replicating Figure 3
+Figure 3 was used as a graphical representation that incorporates the fixed effects of the model into the equation estimated in Table 2. As such, the author estimates:
+
+$Outcome_{myt} = \alpha_{0m} + \gamma_y + \sum^{100 + OBW}_{100-OBW} \delta_jPopulation_{j,mt}$
+
+I was unsure as to how this equation was actually derived. My first method, which seems not to work, is to take the fixed effects form the model and apply them directly to give me $\alpha_{0m}$ and  $\gamma_y$. I run a linear regression with dummy variables for each population, thereby regressing to obtain $\delta_j$ which will be the coefficient of the respective dummy variables. Using these $\delta_j$ values and binning them into four population observations, I form the figure as seen below by plotting $\delta_j$ against the population variable.   
+
+```{r}
+########## 4.6 Replicating Figure 3 ##########
+## Replicating for Figure 3
+
+# Subsetting the data to the bandwidth of expenditures as done by the author.
+bw <- 27
+df.fig3.left<-df.discon %>%
+    filter(pop_run > 0 - bw & pop_run < 0)
+df.fig3.right<-df.discon %>%
+    filter(pop_run > 0 & pop_run < 0 + bw)
+#str(df.fig3.left)
+def_plm2 <- plm(deficit_c_dem~pop_run+dd_bi+dd_pop_run+as.factor(year), data = df.plm,index = c("id"), model = "within")
+
+#Taking the fixed effects of the years from the model
+def_fix_year <- def_plm2$coefficients[4:length(def_plm2$coefficients)]
+#def_fix_year
+
+# Cretaing the Years. Note that the element number of this vector year is the same as the def_fix_year
+Year<-1989:2011
+#Year
+
+#df_fe_year <- data.frame(year,def_fix_unit)
+
+# Taking the fixed effects of the unit from the model
+def_fix_unit <- fixef(def_plm2)
+def_fix_unit_e<-summary(def_fix_unit)[,c("Estimate")]
+
+# Extracting the IDs. Note that the element number of this vector ID is the same as the def_fix_unit
+ID<-unique(strtoi(list.names(def_fix_unit)))
+
+
+df_fe_year <- data.frame(Year,def_fix_year)
+df_fe_unit <- data.frame(ID,def_fix_unit_e)
+
+df.fig3.left$fe_unit<-df_fe_unit$def_fix_unit_e[match(df.fig3.left$id,df_fe_unit$ID)]
+#df.fig3.left$fe_unit
+df.fig3.left$fe_year<-df_fe_year$def_fix_year[match(df.fig3.left$year,df_fe_year$Year)]
+#df.fig3.left$fe_year
+
+df.fig3.left<-df.fig3.left %>% 
+  na.omit(c(fe_year,fe_unit))%>%
+  mutate(outcome_mutate=deficit_c_dem-fe_year-fe_unit)
+
+def_left<-lm(outcome_mutate~as.factor(pop_run)-1,data=df.fig3.left)
+
+def_coef_left<-def_left$coefficients
+def_coef_left<-unname(def_coef_left,force=TRUE)
+def_pop_left<-73:99
+def_id_left<-rep(1,length(def_pop_left))
+def_left_t<-data.frame(def_pop_left,def_coef_left,def_id_left)
+def_left_t<-setNames(def_left_t,c("pop","coef","id"))
+
+df.fig3.right$fe_unit<-df_fe_unit$def_fix_unit_e[match(df.fig3.right$id,df_fe_unit$ID)]
+#df.fig3.right$fe_unit
+df.fig3.right$fe_year<-df_fe_year$def_fix_year[match(df.fig3.right$year,df_fe_year$Year)]
+#df.fig3.right$fe_year
+
+df.fig3.right<-df.fig3.right %>% 
+  na.omit(c(fe_year,fe_unit))%>%
+  mutate(outcome_mutate=deficit_c_dem-fe_year-fe_unit)
+
+def_right<-lm(outcome_mutate~as.factor(pop_run)-1,data=df.fig3.right)
+#length(def_right$coefficients)
+def_coef_right<-def_right$coefficients
+def_coef_right<-unname(def_coef_right,force=TRUE)
+#def_coef_right
+def_pop_right<-101:127
+def_id_right<-rep(0,length(def_pop_right))
+def_right_t<-data.frame(def_pop_right,def_coef_right,def_id_right)
+def_right_t<-setNames(def_right_t,c("pop","coef","id"))
+
+# Binding the two tibbles
+def_rightleft<-rbind(def_right_t,def_left_t)
+#Normalizing based upon the first bin of four observations (i.e. 101:104) to the right of the cutoff.
+def_rightleft<-def_rightleft %>%
+  mutate(coef=coef-mean(coef[1:3]))
+#def_rightleft
+
+ggplot(def_rightleft,aes(x=pop,y=coef,color = as.factor(id)))+
+  geom_point(alpha = 0.4)+
+  stat_smooth(method="lm")+
+  stat_summary_bin(binwidth = 4)+  
+  ggtitle("Figure 3c: Estimated coefficient of Population Dummy against Population")+
+  xlab("Population")+
+  ylab(bquote(hat(delta[j])))+
+  scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("1","0"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+```
+
+The graph above seems to have too litle variation in $\delta_j$. For the second method, I directly run a linear regression on all the municipality, years and population as dummy variables and extract $\delta_j$ as the coefficient of the population dummy variables. Then, I plot $\delta_j$ against the population variable. Whilst this method seems to still be 
+
+```{r}
+# Running a linear regression on population with fixed effects of the municipality and the year.
+def_left<-lm(deficit_c_dem~as.factor(id)+as.factor(year)+as.factor(population)-1,data=df.fig3.left)
+#def_left$coefficients[661:686]
+def_coef_left<-def_left$coefficients[675:700]
+#def_coef_left
+def_coef_left<-unname(def_coef_left,force=TRUE)
+def_pop_left<-74:99
+def_id_left<-rep(1,length(def_pop_left))
+def_left_t<-data.frame(def_pop_left,def_coef_left,def_id_left)
+def_left_t<-setNames(def_left_t,c("pop","coef","id"))
+
+def_right<-lm(deficit_c_dem~as.factor(id)+as.factor(year)+as.factor(population),data=df.fig3.right)
+#length(def_right$coefficients)
+def_coef_right<-def_right$coefficients[903:928]
+def_coef_right<-unname(def_coef_right,force=TRUE)
+#def_coef_right
+def_pop_right<-101:126
+def_id_right<-rep(0,length(def_pop_right))
+def_right_t<-data.frame(def_pop_right,def_coef_right,def_id_right)
+def_right_t<-setNames(def_right_t,c("pop","coef","id"))
+
+# Binding the two tibbles
+def_rightleft<-rbind(def_right_t,def_left_t)
+#Normalizing based upon the first bin of four observations (i.e. 101:104) to the right of the cutoff.
+def_rightleft<-def_rightleft %>%
+  mutate(coef=coef-mean(coef[1:3]))
+#def_rightleft
+
+ggplot(def_rightleft,aes(x=pop,y=coef,color = as.factor(id)))+
+  geom_point(alpha = 0.4)+
+  stat_smooth(method="lm")+
+  stat_summary_bin(binwidth = 4)+  
+  ggtitle("Figure 3c: Estimated Coefficient of Population Dummy against Population")+
+  xlab("Population")+
+  ylab(bquote(hat(delta[j])))+
+    scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("1","0"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+
+# CHAPTER FIVE:  Main Results -  The Effect of Direct Democracy on Revenues
+Having successfully replicated the main results of Table 2 for deficits, I will use the same sucessful methods for the logarithm of revenues (in this Chapter) and the logarithm of expenditures (in Chapter Six). This involves: 
+
+1. Calculating the accurate bandwidth using *rdbwselect_2014*
+2. Subsetting the dataset based on the bandwidth
+3. Running a two-way fixed effects model with robust standard errors using *plm* and *coeftest*
+4. Calculating and ploting $\delta_j$ (different for each outcome variable) against the population variable
+
+## 5.1 Visual Inspection
+A rough visual inspection of the effect of direct democracy on the logarithm of revenue It is observed that there is a higher change in the outcome variable at the cutoff.
+```{r}
+########## 5.1 Visual Inspection ##########
+
+df.discon %>%
+ ggplot(aes(x = population, y = log_rev_dem, group = as.factor(dd), color = as.factor(dd)))+
+  stat_smooth(method=lm)+
+  ggtitle("Revenues (log) against population")+
+  xlab("Population")+
+  ylab("Revenues (log)")+
+  scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("DD","RD"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+## 5.2 Replicating Table 2 Results with PLM for Log Revenue
+Avoiding all other methods, I will use *rdbwselect_2014* and *plm* directly.
+```{r}
+########## 5.2 Using PLM to Estimate the Effect ##########
+
+rev_rddrobust_bw <- rdbwselect_2014(y=df.discon$log_revenues_c, x=df.discon$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+
+# The Optimal Bandwidth, 1.5x and 0.5x
+bw_rev3 <- rev_rddrobust_bw$bws[1]*(c(1,1.5,0.5))
+#bw_rev3
+
+######################### NORMAL BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_rev3[1] # Selecting the right bandwidth
+df.plm<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Model
+rev_plm <- plm(log_rev_dem~pop_run+dd_bi+dd_pop_run, data = df.plm,index = c("id","year"), model = "within", effect = "twoways")
+  summary(rev_plm)
+
+rev_plm_c<-coeftest(rev_plm,vcov=vcovHC(rev_plm, method = "arellano",type="HC1", cluster = "group"))
+
+## Running the Cubic PLM Model
+rev_plm_cubic <- plm(log_rev_dem~pop_run+dd_bi+I(dd_bi*pop_run)+ + I(dd_bi*pop_run^2)+I(dd_bi*pop_run^3)+I(pop_run^2)+I(pop_run^3),
+                     data = df.discon,index = c("id","year"), model = "within", effect = "twoways")
+  summary(rev_plm_cubic)
+rev_plm_cubic_c<-coeftest(rev_plm_cubic,vcov=vcovHC(rev_plm_cubic, method = "arellano",type="HC1", cluster = "group"))
+######################### 1.5x BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_rev3[2] # Selecting the right bandwidth
+df.plm15<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+#str(df.plm)
+## Running the linear PLM Model
+rev_plm15 <- plm(log_rev_dem~pop_run+dd_bi+dd_pop_run, data = df.plm15,index = c("id","year"), model = "within", effect = "twoways")
+ summary(rev_plm15)
+ rev_plm15_c<-coeftest(rev_plm15,vcov=vcovHC(rev_plm15, method = "arellano",type="HC1", cluster = "group"))
+######################### 0.5x BANDWIDTH ########################  
+## Subsetting the data to within the bandwidth
+bw <- bw_rev3[3] # Selecting the right bandwidth
+df.plm05<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Model
+rev_plm05 <- plm(log_rev_dem~pop_run+dd_bi+dd_pop_run, data = df.plm05,index = c("id","year"), model = "within", effect = "twoways")
+  summary(rev_plm05)  
+rev_plm05_c<-coeftest(rev_plm05,vcov=vcovHC(rev_plm05, method = "arellano",type="HC1", cluster = "group"))
+```
+The table here presents the regression results for Log Revenues. Standard errors are robust. Unit and time fixed effects are accounted for via the two-way fixed effects model.
+```{r,results="asis", warning = FALSE}
+stargazer(rev_plm,rev_plm15,rev_plm05,rev_plm_cubic,
+          se = list(rev_plm_c[,2],rev_plm15_c[,2],rev_plm05_c[,2],rev_plm_cubic_c[,2]),
+          type = "html",
+          title = "Rev (log) PLM Results",
+          dep.var.caption = "Revenue",
+          dep.var.labels = "Logarithm of Revenue (\u20AC)",
+          omit = c("year"),
+          column.labels = c("Optimized BW","1.5 x BW", "0.5 x BW", "Cubic Model (Full Data)"),
+          suppress.errors = TRUE,
+          notes = "BW = 25, 1.5 x BW = 38, 0.5 x BW = 12",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+## 5.3 Replicating Figure 3 Results for Log Revenue
+Here, I used the second method involving dummy variables for each population as in Chapter 4.6.
+```{r}
+########## 5.3 Replicating Figure 3 ##########
+## Replicating for Figure 3
+bw <- 27
+df.fig3.left<-df.discon %>%
+    filter(pop_run > 0 - bw & pop_run < 0)
+df.fig3.right<-df.discon %>%
+    filter(pop_run > 0 & pop_run < 0 + bw)
+#str(df.fig3.left)
+
+rev_plm2 <- plm(log_rev_dem~pop_run+dd_bi+dd_pop_run+factor(year), data = df.plm,index = c("id"), model = "within")
+#Taking the fixed effects of the years from the model
+rev_fix_year <- rev_plm2$coefficients[4:length(rev_plm2$coefficients)]
+#rev_fix_year
+
+# Cretaing the Years. Note that the element number of this vector year is the same as the def_fix_year
+Year<-1989:2011
+#Year
+# Taking the fixed effects of the unit from the model
+rev_fix_unit <- fixef(rev_plm2)
+rev_fix_unit_e<-summary(rev_fix_unit)[,c("Estimate")]
+
+# Extracting the IDs. Note that the element number of this vector ID is the same as the rev_fix_unit
+ID<-strtoi(list.names(rev_fix_unit_e))
+
+rev_left<-lm(log_rev_dem~as.factor(id)+as.factor(year)+as.factor(population),data=df.fig3.left)
+#def_left$coefficients[661:686]
+rev_coef_left<-rev_left$coefficients[675:700]
+#rev_coef_left
+rev_coef_left<-unname(rev_coef_left,force=TRUE)
+rev_pop_left<-74:99
+rev_id_left<-rep(1,length(rev_pop_left))
+rev_left_t<-data.frame(rev_pop_left,rev_coef_left,rev_id_left)
+rev_left_t<-setNames(rev_left_t,c("pop","coef","id"))
+
+rev_right<-lm(log_rev_dem~as.factor(id)+as.factor(year)+as.factor(population),data=df.fig3.right)
+#length(rev_right$coefficients)
+rev_coef_right<-rev_right$coefficients[903:928]
+rev_coef_right<-unname(rev_coef_right,force=TRUE)
+#rev_coef_right
+rev_pop_right<-101:126
+rev_id_right<-rep(0,length(rev_pop_right))
+rev_right_t<-data.frame(rev_pop_right,rev_coef_right,rev_id_right)
+rev_right_t<-setNames(rev_right_t,c("pop","coef","id"))
+
+# Binding the two tibbles
+rev_rightleft<-rbind(rev_right_t,rev_left_t)
+#Normalizing based upon the first bin of four observations (i.e. 101:104) to the right of the cutoff.
+rev_rightleft<-rev_rightleft %>%
+  mutate(coef=coef-mean(coef[1:3]))
+#rev_rightleft
+
+ggplot(rev_rightleft,aes(x=pop,y=coef,color = as.factor(id)))+
+  geom_point(alpha = 0.4)+
+  stat_smooth(method="lm")+
+  stat_summary_bin(binwidth = 4)+  
+  ggtitle("Figure 3b: Estimated coefficient of Population Dummy against Population")+
+  xlab("Population")+
+  ylab(bquote(hat(delta[j])))+
+  scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("1","0"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+# CHAPTER SIX:  Main Results -  The Effect of Direct Democracy on Expenditures
+## 6.1 Visual Inspection
+A rough visual inspection of the effect of direct democracy on the logarithm of expenditures. It is observed that there is a higher change in the outcome variable at the cutoff.
+```{r}
+########## 6.1 Visual Inspection ##########
+
+df.discon %>%
+ ggplot(aes(x = population, y = log_exp_dem, group = as.factor(dd), color = as.factor(dd)))+
+  stat_smooth(method=lm)+
+ ggtitle("Expenditure (log) against population")+
+  xlab("Population")+
+  ylab("Expenditure (log)")+
+  scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("DD","RD"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+
+## 6.2 Replicating Table 2 Results with PLM for Log Expenditures
+Avoiding all other methods, I will use *rdbwselect_2014* and *plm* directly.
+```{r}
+########## 6.2 Using PLM to Estimate the Effect ##########
+
+exp_rddrobust_bw <- rdbwselect_2014(y=df.discon$log_expenditures_c, x=df.discon$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+
+# The Optimal Bandwidth, 1.5x and 0.5x
+bw_exp3 <- exp_rddrobust_bw$bws[1]*(c(1,1.5,0.5))
+#bw_exp3
+
+######################### NORMAL BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_exp3[1] # Selecting the right bandwidth
+df.plm<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Model
+exp_plm <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run, data = df.plm,index = c("id","year"), model = "within", effect = "twoways")
+  summary(exp_plm)
+exp_plm_c<-coeftest(exp_plm,vcov=vcovHC(exp_plm, method = "arellano",type="HC1", cluster = "group"))
+## Running the Cubic PLM Model
+exp_plm_cubic <- plm(log_exp_dem~pop_run+dd_bi+I(dd_bi*pop_run)+ + I(dd_bi*pop_run^2)+I(dd_bi*pop_run^3)+I(pop_run^2)+I(pop_run^3),
+                     data = df.discon,index = c("id","year"), model = "within", effect = "twoways")
+  summary(exp_plm_cubic)
+  exp_plm_cubic_c<-coeftest(exp_plm_cubic,vcov=vcovHC(exp_plm_cubic, method = "arellano",type="HC1", cluster = "group"))
+
+  ######################### 1.5x BANDWIDTH ########################
+## Subsetting the data to within the bandwidth
+bw <- bw_exp3[2] # Selecting the right bandwidth
+df.plm15<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+#str(df.plm)
+
+## Running the linear PLM Model
+exp_plm15 <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run, data = df.plm15,index = c("id","year"), model = "within", effect = "twoways")
+ summary(exp_plm15)
+ exp_plm15_c<-coeftest(exp_plm15,vcov=vcovHC(exp_plm15, method = "arellano",type="HC1", cluster = "group"))
+ 
+######################### 0.5x BANDWIDTH ########################  
+## Subsetting the data to within the bandwidth
+bw <- bw_exp3[3] # Selecting the right bandwidth
+df.plm05<-df.discon %>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Model
+exp_plm05 <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run, data = df.plm05,index = c("id","year"), model = "within", effect = "twoways")
+exp_plm05_c<-coeftest(exp_plm05,vcov=vcovHC(exp_plm05, method = "arellano",type="HC1", cluster = "group"))
+  summary(exp_plm05)  
+```
+The table here presents the regression results for Log Expenditures. Standard errors are robust. Unit and time fixed effects are accounted for via the two-way fixed effects model.
+```{r,results="asis", warning = FALSE}
+stargazer(exp_plm,exp_plm15,exp_plm05,exp_plm_cubic,
+          se = list(exp_plm_c[,2],exp_plm15_c[,2],exp_plm05_c[,2],exp_plm_cubic_c[,2]),
+          type = "html",
+          title = "Rev (log) PLM Results",
+          dep.var.caption = "Revenue",
+          dep.var.labels = "Logarithm of Revenue (\u20AC)",
+          omit = c("year"),
+          column.labels = c("Optimized BW","1.5 x BW", "0.5 x BW", "Cubic Model (Full Data)"),
+          suppress.errors = TRUE,
+          notes = "BW = 27, 1.5 x BW = 41, 0.5 x BW = 13",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+## 6.3 Replicating Figure 3 Results for Log Expenditure
+Here, I used the second method involving dummy variables for each population as in Chapter 4.6.
+```{r}
+########## 6.3 Replicating Figure 3 ##########
+## Replicating for Figure 3
+bw <- 27
+df.fig3.left<-df.discon %>%
+    filter(pop_run > 0 - bw & pop_run < 0)
+df.fig3.right<-df.discon %>%
+    filter(pop_run > 0 & pop_run < 0 + bw)
+#str(df.fig3.left)
+exp_plm2 <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run+factor(year), data = df.plm,index = c("id"), model = "within")
+#Taking the fixed effects of the years from the model
+exp_fix_year <- exp_plm2$coefficients[4:length(exp_plm2$coefficients)]
+#exp_fix_year
+
+# Cretaing the Years. Note that the element number of this vector year is the same as the def_fix_year
+Year<-1989:2011
+#Year
+# Taking the fixed effects of the unit from the model
+exp_fix_unit <- fixef(exp_plm2)
+exp_fix_unit_e<-summary(exp_fix_unit)[,c("Estimate")]
+
+# Extracting the IDs. Note that the element number of this vector ID is the same as the exp_fix_unit
+ID<-strtoi(list.names(exp_fix_unit_e))
+
+exp_left<-lm(log_exp_dem~as.factor(id)+as.factor(year)+as.factor(population),data=df.fig3.left)
+#def_left$coefficients[661:686]
+exp_coef_left<-exp_left$coefficients[675:700]
+#exp_coef_left
+exp_coef_left<-unname(exp_coef_left,force=TRUE)
+exp_pop_left<-74:99
+exp_id_left<-rep(1,length(exp_pop_left))
+exp_left_t<-data.frame(exp_pop_left,exp_coef_left,exp_id_left)
+exp_left_t<-setNames(exp_left_t,c("pop","coef","id"))
+
+exp_right<-lm(log_exp_dem~as.factor(id)+as.factor(year)+as.factor(population),data=df.fig3.right)
+#length(exp_right$coefficients)
+exp_coef_right<-exp_right$coefficients[903:928]
+exp_coef_right<-unname(exp_coef_right,force=TRUE)
+#exp_coef_right
+exp_pop_right<-101:126
+exp_id_right<-rep(0,length(exp_pop_right))
+exp_right_t<-data.frame(exp_pop_right,exp_coef_right,exp_id_right)
+exp_right_t<-setNames(exp_right_t,c("pop","coef","id"))
+
+# Binding the two tibbles
+exp_rightleft<-rbind(exp_right_t,exp_left_t)
+#Normalizing based upon the first bin of four observations (i.e. 101:104) to the right of the cutoff.
+exp_rightleft<-exp_rightleft %>%
+  mutate(coef=coef-mean(coef[1:3]))
+#exp_rightleft
+
+ggplot(exp_rightleft,aes(x=pop,y=coef,color = as.factor(id)))+
+  geom_point(alpha = 0.4)+
+  stat_smooth(method="lm")+
+  stat_summary_bin(binwidth = 4)+  
+  ggtitle("Figure 3a: Estimated coefficient of Population Dummy against Population")+
+  xlab("Population")+
+  ylab(bquote(hat(delta[j])))+
+    scale_colour_discrete(name="Democracy\nSystem",
+                         breaks=c("1","0"),
+                         labels=c("Direct\nDemocracy","Representative\nDemocracy"))
+
+```
+# CHAPTER SEVEN: Project Extension - Covariate Balance
+In the RDD employed by the author, no other variables other than the economic indicators (expenditures, revenues and deficits), the running variable (population), the treatment variable (DD/RD) and the variables used for the two-way fixed effects model (time and municipality). Due to the observed unbalances in Section 3.3b, I hypothesize that the covariate imbalance may cause insignificance in the results. In Table A5 in the Appendix, Sanz conducts a placebo covariate test, using an optimal bandwidth for each variable and running a *plm* model similar to those we have conducted before.
+
+However, I argue that the covariate balance ought to be conducted on the bandwidths run by each model. Theoretically, RDDs measure the presence of an imbalanced outcome variable at the cutoff, assuming as-if random assignment into treatment at the cutoff. As such, there could be imbalances in the covariates especially since we take all observations within the bandwidth conditional on the treatment to be homogenous. This homogeneity may not be the case. 
+
+## 7.1 Covariate Balance Analysis (within bandwidth)
+For consistency with Figure 3, I analyzed the covariate balance within the log expenditures bandwidth of 27. I could also analyze the covariate balance for each of the bandwidths (Models 1,2,3,7) and the full dataset (Models 4,5,6)
+```{r}
+########## 7.1 Analysing the covariate balance within the bandwidth ##########
+
+bw<-27 # Using the bandwidth of the expenditures for consistency
+df.ext<-df.selected %>%
+  mutate(pop_run = population - 99.5)%>%
+  filter(pop_run > 0 - bw & pop_run < 0 + bw)%>%
+  mutate(dd_bi = ifelse(dd == "RD",0,1))
+
+#df.ext is the dataset here.
+summaryC <- df.ext %>% 
+  group_by(dd)%>%
+  select(-one_of("dd","l_log_revenues_c","l_log_expenditures_c","l_deficit_c", "id", "year", "log_revenues_c", "log_expenditures_c"))%>%
+  summarise_all(funs(mean(., na.rm = T)))
+colnames(summaryC)<-c("Democracy System","Expenditures (Euro per cap)",
+         "Revenues (Euro per cap)",
+         "Deficit (Euro per cap)",
+         "PP Vote Sh (%)",
+         "PSOE Vote Sh (%)",
+         "IU Vote Sh (%)",
+         "Votes Difference (%)",
+         "Votes Winner (%)",
+         "Turnout (%)",
+         "Mean Age (years)",
+         "Young (%)",
+         "Middle-Aged (%)",
+         "Old (%)",
+         "Immigrants (%)",
+         "EU Immigrants (%)",
+         "Population (inhabitants)",
+         "Unemployment (%)",
+         "DD",
+         "Running variable (Population)")
+kable(summaryC, digits = 3) %>%
+ kable_styling(bootstrap_options = c("striped","scale_down"), full_width = FALSE, position = "left")
+```
+## 7.2 Attempt at Propensity Score Matching with Imputation
+Due to missing data present, I am unable to immediately execute propensity score matching using the package *MatchIt*. As such, I use MICE or Multivariate Imputation By Chained Equations in order to impute the data. (*van Buuren, S., Groothuis-Oudshoorn, K. (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software, 45(3), 1--67.*) The package will then create imputed values by estimating the values of the missing data. However, due to the extent of the missing data, I was unable to impute sufficient data to run matchit (which requires a complete dataset). Hence, I will not use this method moving forward.
+```{r,eval=FALSE}
+########## 7.2 Using Propensity Score Matching ##########
+#df.ext is the dataset here; df.imp is the imputed dataset
+library(mice)
+library(VIM)
+library(Zelig)
+
+df_small<-df.ext[,-which(colMeans(is.na(df.ext))>0.05)]
+
+imputed_Data <- mice(df_small, m=1, maxit = 2, method = 'pmm', seed = 500, remove_collinear = TRUE)
+df.imp<-imputed_Data$data
+df.imp<-data.frame(df.imp)
+df_smallcheck<-df.imp[,which(colMeans(is.na(df.imp))>0.01)] #check for non-imputed values
+df_smallcheck
+
+head(df.imp)
+
+m.out_near <- matchit(dd_bi ~ g_p_votes_pp + g_p_votes_psoe + g_p_votes_iu+g_p_diff+g_p_votes_winner+g_p_turnout+age_avg+sh_young+sh_adult+sh_old+sh_foreign+sh_eu+unemployment_rate+year,
+    data = df.imp, method ="nearest", distance = "logit", replace = TRUE) # how to extract specific column names
+
+summary(m.out_near)
+plot(m.out_near, type = "jitter")
+plot(m.out_near, type = "hist")
+
+m.data2 <- match.data(m.out_near, distance = "pscore")
+
+
+```
+## 7.3 Covariate T-Tests between that of DD and RD Groups
+Due to the inability to use propensity score matching, I instead resort to two-way t-tests to see if there are statistical differences between the covariate values of the direct democracy group and the representative democracy group within the bandwidth.
+```{r}
+########## 7.3 Using T-Tests Between DD and RD Groups within BW ##########
+#df.ttest is the dataset here.
+
+df.ttest<- df.ext %>% 
+  select(-one_of("dd","l_log_revenues_c","l_log_expenditures_c","l_deficit_c", "id", "year","pop_run"))
+
+# Running multiple t-tests based on dd
+# Assuming the variables are normally distributed.
+ttests <- map(
+  select(df.ttest,-c(dd_bi)),
+  ~ t.test(.x ~ dd_bi, data = df.ttest)
+)
+#class(ttests)
+
+library(broom) # For tidy
+library(purrr)
+
+# Compressing all the results into one table using tidy
+tab<-map_df(ttests,tidy)
+
+# Adding row names
+names <- c("Expenditures (Euro per cap)","Revenues (Euro per cap)",
+         "Deficit (Euro per cap)",
+         "PP Vote Sh (%)",
+         "PSOE Vote Sh (%)",
+         "IU Vote Sh (%)",
+         "Votes Difference (%)",
+         "Votes Winner (%)",
+         "Turnout (%)",
+         "Mean Age (years)",
+         "Young (%)",
+         "Middle-Aged (%)",
+         "Old (%)",
+         "Immigrants (%)",
+         "EU Immigrants (%)",
+         "Population (inhabitants)",
+         "Unemployment (%)",
+         "Log Revenues",
+         "Log Expenditures")
+tab2<-add_column(tab,names)
+
+# Adding significance levels
+tab2<-tab2%>%
+  mutate(siglevel = ifelse(p.value<0.05,ifelse(p.value<0.01,"<0.01","<0.05"),">=0.05"))
+
+# Reordering the variables
+tab2<-tab2%>%
+  select(names,siglevel,p.value,everything())
+
+# Adding column names
+colnames(tab2)<- c("Variable","Sig. Level","P-Value","Mean Difference", "RD Group Mean", "DD Group Mean",
+                   "T-Statistic","Parameter","Conf. Int (2.5%)","Conf. Int (97.5%)","Method","Type")
+# Using kable
+kable(tab2, digits = 3) %>%
+ kable_styling(bootstrap_options = c("striped","scale_down"), position = "left")%>%
+  row_spec(c(4,5,7,8,9,10,11,12,13,14,16,17),bold = T, color = "black",background ="orange")%>%
+  row_spec(18, bold = T, color = "black",background = "yellow")%>%
+  footnote(general = " All variables with a significance level < 0.01 is highlighted in orange whilst the lone variable with a significance level < 0.05 is highlighted in yellow.")
+```
+## 7.4 Conditioning on Covariates
+
+Whilst I did the test on all covariates listed in Table 1 in the paper, it is noteworthy that we expect population to be statistically different between the two samples. Population, however, was added for completeness. The log revenues was taken to be statistically different. In spite of this, log expenditures was not statistically different in the two groups. This is in contrast to the RDD which showed a statistically significant difference at the cutoff, which used the same bandwidth as the tests in this chapter.
+
+According to the DAG I drew, I should NOT condition on any of these covariates as they could only bias the estimate further by doing so. However, for argument and experimental sake, I will condition on these covariates to see any change in our estimates. 
+
+As such, I will attempt to see the different results for expenditures if I condition on these covariates.
+
+```{r}
+########## 7.4 Attempting to run the regression conditional on statistically significantly different covariates ##########
+# df.plm is the data set used for plm here (within the correct bandwidths for expenditure)
+
+## Running the linear PLM Model
+without <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run, data = df.plm,index = c("id","year"), model = "within",effect = "twoways")
+#  summary(without)
+without_c<-coeftest(with,vcov=vcovHC(with, method = "arellano",type="HC1", cluster = "group"))
+without_c
+  #+sh_young+sh_adult+sh_old were omitted due to their unusually high coefficient values (>4000)
+with <- plm(log_exp_dem~pop_run+dd_bi+dd_pop_run+g_p_votes_pp+g_p_votes_psoe+g_p_diff+g_p_votes_winner+g_p_turnout+age_avg+sh_foreign+unemployment_rate, data = df.plm,index = c("id","year"), model = "within",effect = "twoways")
+#  summary(with)
+with_c<-coeftest(with,vcov=vcovHC(with, method = "arellano",type="HC1", cluster = "group"))
+with_c
+```
+The table below compares the original model and the model that controls for other covariates deemed to have statistically significant difference between observations in RD and DD. The most significant observation is that the democracy variable is now no longer as statistically significant as before (P-val = 0.05169)
+```{r,,warning=FALSE,results="asis"}
+stargazer(without,with,
+          se = list(without_c[,2],with_c[,2]),
+          type = "html",
+          title = "With and without controlling for covariates",
+          dep.var.caption = "Expenditure",
+          dep.var.labels = "Logarithm of Expenditure (\u20AC)",
+#          omit = c("year"),
+          column.labels = c("Original","Controlled"),
+          suppress.errors = TRUE,
+ #         notes = "BW = 25, 1.5 x BW = 38, 0.5 x BW = 12",
+#          order = c(2,1,3),
+ #         covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+# CHAPTER EIGHT: Project Extension - Estimating Revenues and Expenditures RDD Effects (without logarithms)
+The project made used of of the logarithm of expenditures and revenues in order to show statistically significant results. I want to explore the regression results. As such, I replicate the process created for the linear model (first model in Table 2) to investigate if we may still obtain comparable results. 
+
+## 8.1 IK Bandwidth, Data Subsetting & PLM
+```{r}
+########## 8.1 IK Bandwidth, Data Subsetting & PLM  ##########
+## Obtaining ideal bandwidths for each model
+bw_rev_Nm <- rdbwselect_2014(y=df.gdp$revenues_c, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_rev_N <- bw_rev_Nm$bws[1]*(c(1,1.5,0.5))
+bw_exp_Nm <- rdbwselect_2014(y=df.gdp$expenditures_c, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_exp_N <- bw_exp_Nm$bws[1]*(c(1,1.5,0.5))
+
+## Subsetting the data
+df.rev_N<-df.gdp %>%
+  filter(pop_run > 0 - bw_rev_N[1] & pop_run < 0 + bw_rev_N[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+df.exp_N<-df.gdp %>%
+  filter(pop_run > 0 - bw_exp_N[1] & pop_run < 0 + bw_exp_N[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Models
+
+plm.rev_N <- plm(revenues_c~pop_run+dd_bi+dd_pop_run, data = df.rev_N,index = c("id","year"), model = "within", effect = "twoways")
+  plm.rev_N_se<-coeftest(plm.rev_N,vcov=vcovHC(plm.rev_N, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.rev_N) # Check here for new model
+#  summary(rev_plm)   # Check here for old model
+  
+plm.exp_N <- plm(expenditures_c~pop_run+dd_bi+dd_pop_run, data = df.exp_N,index = c("id","year"), model = "within", effect = "twoways")
+  plm.exp_N_se<-coeftest(plm.exp_N,vcov=vcovHC(plm.exp_N, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.exp_N) # Check here for new model
+#  summary(exp_plm)   # Check here for old model
+```
+## 8.2 Tables for Overall Results
+Here, it is observed that for the non-log models, the RDD causal estimates of direct democracy are no longer statistically significant. The *R^2* values have decreased significantly, along with the F-statistic. Firstly, the bandwidth has increased slightly (eg. from 25 to 32 for the revenue modelsand from 27 to 32 for the expenditure models). As it took it more values, it estimated a much higher value of LATE (vis-a-vis the values in the original models). However, it also became non-statistically significant. This could be the reason for the author using the logarithm of revenue and expenditure to show statistically significant results. This could arise because the results are only statistically different between the two groups at the bandwidth on a log scale but not on a linear scale.
+
+Note: all standard errors are clustered on municipalities and the running variable.
+```{r,results="asis", warning = FALSE}
+stargazer(rev_plm,plm.rev_N,exp_plm,plm.exp_N,
+          se = list(rev_plm_c[,2],plm.rev_N_se[,2],exp_plm_c[,2],plm.exp_N_se[,2]),
+          type = "html",
+          title = "Comparing RDD Results with Log and non-Log Outcome Variables",
+          dep.var.labels = c("Logarithm of Revenue","Revenue","Logarithm of Expenditure","Expenditure"),
+          omit = c("year"),
+          column.labels = c("Original","Non-Log","Original","Non-Log"),
+          #suppress.errors = TRUE,
+          notes = "~(1) BW=25, (2) BW = 32, (3) BW = 27, (4) BW = 32",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+
+
+# CHAPTER NINE: Project Extension - Sensitivity of Regression Estimates to GDP Deflators (External GDP Deflator Data)
+As a project extension with external data, I took Spain's GDP Deflator from the World Bank. This allowed me to calculate the nominal economic indicators and see the sensitivity of the regression estimates to a one percent increase in GDP deflators and one person decrease in GDP deflators (across all years). I hypothesise that the effect will be marginal but noticeable for revenue, but almost completely negligible for the logarithm of expenditure and deficit as the change in real values due to the change in GDP deflators will change the log value by only a marginal proportion. 
+
+## 9.1 Obtaining GDP Deflators and Calculating Nominal Values
+```{r,eval=FALSE}
+
+## Spain GDP Deflator from World Bank
+#spain_gdpdeflator <- read.csv("spain_gdpdeflator.csv", stringsAsFactors = FALSE)
+#spain_gdpdeflator
+#colnames(spain_gdpdeflator) <- "GDP Deflator"
+#gdpdef_t <- spain_gdpdeflator[2:length(spain_gdpdeflator)]
+#str(gdpdef_t)
+#year = seq(1961,2019, by = 1)
+#year_t <- tibble(year)
+#colnames(year_t) <- "Year"
+#bind_cols(gdpdef_t,year_t)
+```
+
+```{r}
+########## 9.1 Downloading GDP Deflators and Calculating Nominal Values ##########
+# Obtaining all values for years and the relevant gdp deflators from World Bank
+year<-c(1961,1962,1963,1964,1965,1966,1967,1968,1969,1970,1971,1972,1973,1974,1975,1976,1977,1978,1979,1980,1981,1982,1983,1984,1985,1986,1987,1988,1989,1990,1991,1992,1993,1994,1995,1996,1997,1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018)
+gdpdef<-c(2.466389754,6.095841623,7.84537469,6.254319615,9.164866647,8.17374336,8.537719088,5.911130109,5.133250642,8.768999111,7.846021338,8.517924864,11.8495953,15.94510943,16.78178182,16.48992178,23.38307,20.63104227,16.93163151,13.35482707,12.35119229,13.58232336,11.88424572,10.86473371,8.595479445,10.87881648,5.944198329,5.936126203,6.896194095,7.326251168,6.935139483,6.710771209,4.537241246,3.879841995,4.933129725,3.4707213,2.381828025,2.532759835,2.664837615,3.276074469,4.079865676,4.114985296,3.918908845,3.921275695,4.149491286,3.978200117,3.331139602,2.135441392,0.252533821,0.16041859,0.028968199,0.067950146,0.353610345,-0.19498388,0.513159948,0.293784948,1.236606788,0.987738161)/100
+gdpdef_t<-tibble(year,gdpdef)
+
+# Subsetting for this dataset
+gdpdef_small<- gdpdef_t%>%
+  filter(year>=1988 & year<=2011)
+
+# Since each gdp deflator is the real value with respect to the previous year, the actual value to divide the nominal values must be multiplied by all previous values.
+# Nom here, then is the overall gdp deflator
+
+nom <- rep(1,dim(gdpdef_small)[1]) # Creating a vector of ones
+count <- 0
+for (i in 2:dim(gdpdef_small)[1])
+{
+nom[i] <- (gdpdef_small$gdpdef[i]+1)*nom[i-1]
+count <- count+1
+}
+
+# Using our old dataset to retrieve the nominal values. 
+# For consistency again, I used the expenditures dataset
+df.gdp<-df.selected %>%
+  mutate(pop_run = population - 99.5)%>%
+  mutate(dd_bi = ifelse(dd == "RD",0,1))
+
+# Creating vectors of ones
+df.gdp$nomfac<-rep(1,dim(df.gdp)[1])
+df.gdp$deficit_nom<-rep(1,dim(df.gdp)[1])
+df.gdp$exp_nom<-rep(1,dim(df.gdp)[1])
+df.gdp$rev_nom<-rep(1,dim(df.gdp)[1])
+
+## Calculating Nominal Values
+# Looping to calculate the nominal values
+for (i in 1:dim(df.gdp)[1])
+{
+df.gdp$nomfac[i] <- nom[df.gdp$year[i] == gdpdef_small$year]
+df.gdp$deficit_nom[i] <- df.gdp$deficit_c[i] * df.gdp$nomfac[i]
+df.gdp$exp_nom[i] <- 10^df.gdp$log_expenditures_c[i] * df.gdp$nomfac[i]
+df.gdp$rev_nom[i] <- 10^df.gdp$log_revenues_c[i] * df.gdp$nomfac[i]
+count <- count+1
+}
+
+# Looping to calculate the nominal values
+for (i in 1:dim(df.gdp)[1])
+{
+df.gdp$nomfac[i] <- nom[df.gdp$year[i] == gdpdef_small$year]
+df.gdp$deficit_nom[i] <- df.gdp$deficit_c[i] * df.gdp$nomfac[i]
+df.gdp$exp_nom[i] <- 10^df.gdp$log_expenditures_c[i] * df.gdp$nomfac[i]
+df.gdp$rev_nom[i] <- 10^df.gdp$log_revenues_c[i] * df.gdp$nomfac[i]
+count <- count+1
+}
+
+```
+## 9.2 Running PLM for Economic Variables Adjusted for 1% HIGHER GDP Deflator
+First, I calculate the relevant economic variables adjusted for a 1% higher GDP deflator across all years. As such, the nominal value is divided by the elevated GDP deflator. Thereafter, I ran individual models to re-calculate optimal bandwidths, subsetting the values within those optimal bandwidths, and running a two-way fixed effects model whilst providing robust standard errors on municipalities. Thereafter, I compare and contrast the results for deficit, logarithm of revenues and logarithm of expenditure. 
+```{r}
+########## 9.2 Running PLM for Economic Variables Adjusted for 1% Higher GDP Deflator ##########
+# If the GDP Deflator was in fact one percent higher (cet.par), the difference between values will then become smaller. Therefore, the RDD ought to decrease.
+for (i in 1:dim(df.gdp)[1])
+{
+df.gdp$deficit_h[i] <- df.gdp$deficit_nom[i] / (df.gdp$nomfac[i]+0.01)
+df.gdp$log_exp_h[i] <- log10(df.gdp$exp_nom[i] / (df.gdp$nomfac[i]+0.01))
+df.gdp$log_rev_h[i] <- log10(df.gdp$rev_nom[i] / (df.gdp$nomfac[i]+0.01))
+count <- count+1
+}
+
+## Obtaining ideal bandwidths individually for each model
+bw_def_hm <- rdbwselect_2014(y=df.gdp$deficit_h, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_def_h <- bw_def_hm$bws[1]*(c(1,1.5,0.5))
+bw_rev_hm <- rdbwselect_2014(y=df.gdp$log_rev_h, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_rev_h <- bw_rev_hm$bws[1]*(c(1,1.5,0.5))
+bw_exp_hm <- rdbwselect_2014(y=df.gdp$log_exp_h, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_exp_h <- bw_exp_hm$bws[1]*(c(1,1.5,0.5))
+
+## Subsetting the data
+df.def_h<-df.gdp %>%
+  filter(pop_run > 0 - bw_def_h[1] & pop_run < 0 + bw_def_h[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+df.rev_h<-df.gdp %>%
+  filter(pop_run > 0 - bw_rev_h[1] & pop_run < 0 + bw_rev_h[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+df.exp_h<-df.gdp %>%
+  filter(pop_run > 0 - bw_exp_h[1] & pop_run < 0 + bw_exp_h[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Models
+
+plm.def_h <- plm(deficit_h~pop_run+dd_bi+dd_pop_run, data = df.def_h,index = c("id","year"), model = "within", effect = "twoways")
+  plm.def_h_se<-coeftest(plm.def_h,vcov=vcovHC(plm.def_h, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.def_h) # Check here for new model
+#  summary(def_plm)   # Check here for old model
+  
+plm.rev_h <- plm(log_rev_h~pop_run+dd_bi+dd_pop_run+factor(year), data = df.rev_h,index = c("id","year"), model = "within", effect = "twoways")
+  plm.rev_h_se<-coeftest(plm.rev_h,vcov=vcovHC(plm.rev_h, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.rev_h) # Check here for new model
+#  summary(rev_plm)   # Check here for old model
+  
+plm.exp_h <- plm(log_exp_h~pop_run+dd_bi+dd_pop_run, data = df.exp_h,index = c("id","year"), model = "within", effect = "twoways")
+  plm.exp_h_se<-coeftest(plm.exp_h,vcov=vcovHC(plm.exp_h, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.exp_h) # Check here for new model
+#  summary(exp_plm)   # Check here for old model
+
+```
+## 9.3 Running PLM for Economic Variables Adjusted for 1% LOWER GDP Deflator
+```{r}
+########## 9.3 Running PLM for Economic Variables Adjusted for 1% LOWER GDP Deflator ##########
+# Similarly, if the GDP Deflator was in fact one percent lower (cet.par), the difference between values will then become larger. Therefore, the RDD ought to increase.
+
+for (i in 1:dim(df.gdp)[1])
+{
+df.gdp$deficit_l[i] <- df.gdp$deficit_nom[i] / (df.gdp$nomfac[i]-0.01)
+df.gdp$log_exp_l[i] <- log10(df.gdp$exp_nom[i] / (df.gdp$nomfac[i]-0.01))
+df.gdp$log_rev_l[i] <- log10(df.gdp$rev_nom[i] / (df.gdp$nomfac[i]-0.01))
+count <- count+1
+}
+
+# Running the PLM for LINEAR model with the OPTIMAL BW
+
+bw_def_lm <- rdbwselect_2014(y=df.gdp$deficit_l, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_def_l <- bw_def_lm$bws[1]*(c(1,1.5,0.5))
+bw_rev_lm <- rdbwselect_2014(y=df.gdp$log_rev_l, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_rev_l <- bw_rev_lm$bws[1]*(c(1,1.5,0.5))
+bw_exp_lm <- rdbwselect_2014(y=df.gdp$log_exp_l, x=df.gdp$pop_run, c = 0 , kernel = "uni", bwselect = "IK")
+bw_exp_l <- bw_exp_lm$bws[1]*(c(1,1.5,0.5))
+
+## Subsetting the data
+df.def_l<-df.gdp %>%
+  filter(pop_run > 0 - bw_def_l[1] & pop_run < 0 + bw_def_l[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+df.rev_l<-df.gdp %>%
+  filter(pop_run > 0 - bw_rev_l[1] & pop_run < 0 + bw_rev_l[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+df.exp_l<-df.gdp %>%
+  filter(pop_run > 0 - bw_exp_l[1] & pop_run < 0 + bw_exp_l[1]) %>%
+  mutate(dd_pop_run = dd_bi*pop_run)
+
+## Running the linear PLM Models
+
+plm.def_l <- plm(deficit_l~pop_run+dd_bi+dd_pop_run, data = df.def_l,index = c("id","year"), model = "within", effect = "twoways")
+  plm.def_l_se<-coeftest(plm.def_l,vcov=vcovHC(plm.def_l, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.def_h) # Check here for new model
+#  summary(def_plm)   # Check here for old model
+  
+plm.rev_l <- plm(log_rev_l~pop_run+dd_bi+dd_pop_run+factor(year), data = df.rev_l,index = c("id","year"), model = "within", effect = "twoways")
+  plm.rev_l_se<-coeftest(plm.rev_l,vcov=vcovHC(plm.rev_l, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.rev_h) # Check here for new model
+#  summary(rev_plm)   # Check here for old model
+  
+plm.exp_l <- plm(log_exp_l~pop_run+dd_bi+dd_pop_run, data = df.exp_l,index = c("id","year"), model = "within", effect = "twoways")
+  plm.exp_l_se<-coeftest(plm.exp_l,vcov=vcovHC(plm.exp_l, method = "arellano",type="HC1", cluster = "group"))
+  summary(plm.exp_h) # Check here for new model
+#  summary(exp_plm)   # Check here for old model
+```
+## 9.4 Tables for Overall Results
+Here, it is observed that there was almost no change in bandwidths and/or regression results for that of the logarithm of revenues and logarithm of expenditure. Thus, this confirms our hypothesis. Howver, there were only slight changes in the deficit RDD regression results. We see that the bandwidth changed by 1 less in the model for the Low GDP Deflator. Still, none of the regression results for revenue on direct democracy was statistically significant.
+
+Note: all standard errors are clustered on municipalities and the running variable.
+```{r,results="asis", warning = FALSE}
+stargazer(def_plm,plm.def_h,plm.def_l,
+          se = list(def_plm_c[,2],plm.def_h_se[,2],plm.def_l_se[,2]),
+          type = "html",
+          title = "Deficit PLM Results with Differing GDP Deflators",
+          dep.var.caption = "Deficit",
+          omit = c("year"),
+          column.labels = c("Current GDP Deflator","High GDP Deflator (+1% for all years","Low GDP Deflator (-1% for all years)"),
+          suppress.errors = TRUE,
+          notes = "BW = 98, except the third model, where BW = 97",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+
+```{r,results="asis", warning = FALSE}
+stargazer(rev_plm,plm.rev_h,plm.rev_l,
+          se = list(rev_plm_c[,2],plm.rev_h_se[,2],plm.rev_l_se[,2]),
+          type = "html",
+          title = "Logarithm of Revenue PLM Results with Differing GDP Deflators",
+          dep.var.caption = "Logarithm of Revenue",
+          omit = c("year"),
+          column.labels = c("Current GDP Deflator","High GDP Deflator (+1% for all years","Low GDP Deflator (-1% for all years)"),
+          suppress.errors = TRUE,
+          notes = "BW = 25 for all models",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
+```{r,results="asis", warning = FALSE}
+stargazer(exp_plm,plm.exp_h,plm.exp_l,
+          se = list(exp_plm_c[,2],plm.exp_h_se[,2],plm.exp_l_se[,2]),
+          type = "html",
+          title = "Logarithm of Expenditure PLM Results with Differing GDP Deflators",
+          dep.var.caption = "Logarithm of Expenditure",
+          omit = c("year"),
+          column.labels = c("Current GDP Deflator","High GDP Deflator (+1% for all years","Low GDP Deflator (-1% for all years)"),
+          suppress.errors = TRUE,
+          notes = "BW = 27 for all models",
+          order = c(2,1,3),
+          covariate.labels = c("Direct democracy","Population","Direct democracy x Population"),
+          digits = 4)
+```
